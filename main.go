@@ -202,6 +202,12 @@ var rollup = &cli.Command{
 				resolvedWallets[dealInfo.Proposal.Client] = clientAddr
 			}
 
+			// perl -E 'say scalar gmtime ( 166560 * 30 + 1598306400 )'
+			// Wed Oct 21 18:00:00 2020
+			if dealInfo.Proposal.StartEpoch <= 166560 {
+				continue
+			}
+
 			projID, projKnown := knownAddrMap[clientAddr]
 			if !projKnown {
 				continue
