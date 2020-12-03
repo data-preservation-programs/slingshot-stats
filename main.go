@@ -225,6 +225,10 @@ var rollup = &cli.Command{
 				projStats[projID] = projStatEntry
 			}
 
+			if projStatEntry.cidDeals[dealInfo.Proposal.PieceCID] >= 10 {
+				continue
+			}
+
 			grandTotals.seenClient[clientAddr] = true
 			clientStatEntry, ok := projStatEntry.ClientStats[clientAddr.String()]
 			if !ok {
