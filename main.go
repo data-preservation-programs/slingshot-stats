@@ -190,6 +190,14 @@ var rollup = &cli.Command{
 
 		for dealID, dealInfo := range deals {
 
+			// Only count deals that have properly started, not past/future ones
+			// https://github.com/filecoin-project/specs-actors/blob/v0.9.9/actors/builtin/market/deal.go#L81-L85
+			// Bail on 0 as well in case SectorStartEpoch is uninitialized due to some bug
+			if dealInfo.State.SectorStartEpoch <= 0 ||
+				dealInfo.State.SectorStartEpoch > head.Height() {
+				continue
+			}
+
 			clientAddr, found := resolvedWallets[dealInfo.Proposal.Client]
 			if !found {
 				var err error
