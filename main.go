@@ -15,6 +15,7 @@ import (
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-state-types/abi"
 	lcli "github.com/filecoin-project/lotus/cli"
+	"github.com/filecoin-project/specs-actors/v3/actors/builtin"
 	"github.com/ipfs/go-cid"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/urfave/cli/v2"
@@ -216,6 +217,11 @@ var rollup = &cli.Command{
 			// 166560: Wed Oct 21 18:00:00 2020
 			// 307680: Wed Dec  9 18:00:00 2020
 			if dealInfo.Proposal.StartEpoch <= 307680 {
+				continue
+			}
+
+			// anything under 360 days: not qualified
+			if dealInfo.Proposal.EndEpoch-dealInfo.Proposal.StartEpoch < builtin.EpochsInDay*360 {
 				continue
 			}
 
