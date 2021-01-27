@@ -216,7 +216,8 @@ var rollup = &cli.Command{
 			//
 			// 166560: Wed Oct 21 18:00:00 2020
 			// 307680: Wed Dec  9 18:00:00 2020
-			if dealInfo.Proposal.StartEpoch <= 307680 {
+			// 448800: Wed Jan 27 18:00:00 2021
+			if dealInfo.Proposal.StartEpoch <= 448800 {
 				continue
 			}
 
