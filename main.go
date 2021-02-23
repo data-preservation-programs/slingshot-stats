@@ -191,7 +191,7 @@ var rollup = &cli.Command{
 
 		for dealID, dealInfo := range deals {
 
-			// Only count deals that have properly started, not past/future ones
+			// Only count deals whose sectors have properly started, not past/future ones
 			// https://github.com/filecoin-project/specs-actors/blob/v0.9.9/actors/builtin/market/deal.go#L81-L85
 			// Bail on 0 as well in case SectorStartEpoch is uninitialized due to some bug
 			if dealInfo.State.SectorStartEpoch <= 0 ||
@@ -211,13 +211,14 @@ var rollup = &cli.Command{
 				resolvedWallets[dealInfo.Proposal.Client] = clientAddr
 			}
 
+			// Cut off deals from previous phase
 			//
 			// perl -E 'say scalar gmtime ( XXX * 30 + 1598306400 )'
 			//
 			// 166560: Wed Oct 21 18:00:00 2020
 			// 307680: Wed Dec  9 18:00:00 2020
 			// 448800: Wed Jan 27 18:00:00 2021
-			if dealInfo.Proposal.StartEpoch <= 448800 {
+			if dealInfo.State.SectorStartEpoch <= 448800 {
 				continue
 			}
 
