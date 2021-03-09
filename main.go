@@ -66,8 +66,9 @@ type projectAggregateStats struct {
 	NumProviders        int                              `json:"total_num_providers"`
 	ClientStats         map[string]*clientAggregateStats `json:"clients"`
 
-	dataPerProvider map[address.Address]int64
-	cidDeals        map[cid.Cid]int
+	dataPerProvider          map[address.Address]int64
+	timesSeenPieceCid        map[cid.Cid]int
+	timesSeenPieceCidAllTime map[cid.Cid]int
 }
 type clientAggregateStats struct {
 	Client       string `json:"client"`
@@ -211,6 +212,25 @@ var rollup = &cli.Command{
 				resolvedWallets[dealInfo.Proposal.Client] = clientAddr
 			}
 
+			projID, projKnown := knownAddrMap[clientAddr]
+			if !projKnown {
+				continue
+			}
+
+			projStatEntry, ok := projStats[projID]
+			if !ok {
+				projStatEntry = &projectAggregateStats{
+					ProjectID:                projID,
+					ClientStats:              make(map[string]*clientAggregateStats),
+					timesSeenPieceCid:        make(map[cid.Cid]int),
+					timesSeenPieceCidAllTime: make(map[cid.Cid]int),
+					dataPerProvider:          make(map[address.Address]int64),
+				}
+				projStats[projID] = projStatEntry
+			}
+
+			projStatEntry.timesSeenPieceCidAllTime[dealInfo.Proposal.PieceCID]++
+
 			// Cut off deals from previous phase
 			//
 			// perl -E 'say scalar gmtime ( XXX * 30 + 1598306400 )'
@@ -228,24 +248,9 @@ var rollup = &cli.Command{
 				continue
 			}
 
-			projID, projKnown := knownAddrMap[clientAddr]
-			if !projKnown {
-				continue
-			}
-
 			grandTotals.seenProject[projID] = true
-			projStatEntry, ok := projStats[projID]
-			if !ok {
-				projStatEntry = &projectAggregateStats{
-					ProjectID:       projID,
-					ClientStats:     make(map[string]*clientAggregateStats),
-					cidDeals:        make(map[cid.Cid]int),
-					dataPerProvider: make(map[address.Address]int64),
-				}
-				projStats[projID] = projStatEntry
-			}
 
-			if projStatEntry.cidDeals[dealInfo.Proposal.PieceCID] >= 10 {
+			if projStatEntry.timesSeenPieceCidAllTime[dealInfo.Proposal.PieceCID] >= 10 {
 				continue
 			}
 
@@ -269,7 +274,7 @@ var rollup = &cli.Command{
 			clientStatEntry.providers[dealInfo.Proposal.Provider] = true
 
 			grandTotals.seenPieceCid[dealInfo.Proposal.PieceCID] = true
-			projStatEntry.cidDeals[dealInfo.Proposal.PieceCID]++
+			projStatEntry.timesSeenPieceCid[dealInfo.Proposal.PieceCID]++
 			clientStatEntry.cids[dealInfo.Proposal.PieceCID] = true
 
 			grandTotals.TotalDeals++
@@ -350,9 +355,9 @@ var rollup = &cli.Command{
 		//
 		// write out client_stats.json
 		for _, ps := range projStats {
-			ps.NumCids = len(ps.cidDeals)
+			ps.NumCids = len(ps.timesSeenPieceCid)
 			ps.NumProviders = len(ps.dataPerProvider)
-			for _, dealsForCid := range ps.cidDeals {
+			for _, dealsForCid := range ps.timesSeenPieceCid {
 				if ps.HighestCidDealCount < dealsForCid {
 					ps.HighestCidDealCount = dealsForCid
 				}
