@@ -24,7 +24,15 @@ import (
 
 // Requested by @jbenet
 // How many epochs back to look at for dealstats
-var epochLookback = abi.ChainEpoch(10)
+var defaultEpochLookback = abi.ChainEpoch(10)
+
+// perl -E 'say scalar gmtime ( XXX * 30 + 1598306400 )'
+//
+// 166560: Wed Oct 21 18:00:00 2020
+// 307680: Wed Dec  9 18:00:00 2020
+// 448800: Wed Jan 27 18:00:00 2021
+// 569760: Wed Mar 10 18:00:00 2021
+var currentPhaseStart = abi.ChainEpoch(569760)
 
 //
 // contents of basic_stats.json
@@ -127,12 +135,26 @@ var rollup = &cli.Command{
 	Usage:     "Translating current lotus state into format and rollups as understood by https://slingshot.filecoin.io/",
 	Name:      "rollup",
 	ArgsUsage: "  <non-existent output directory name>  <eligible project list>",
+	Flags: []cli.Flag{
+		&cli.Int64Flag{
+			Name:        "current-epoch",
+			DefaultText: "Current Filecoin epoch",
+		},
+		&cli.Int64Flag{
+			Name:  "phasestart-epoch",
+			Value: int64(currentPhaseStart),
+		},
+	},
 	Action: func(cctx *cli.Context) error {
 
 		if cctx.Args().Len() != 2 || cctx.Args().Get(0) == "" || cctx.Args().Get(1) == "" {
 			return errors.New("must supply 2 arguments: a nonexistent target directory to write results to and a source of currently active projects")
 		}
 		ctx := lcli.ReqContext(cctx)
+
+		if cctx.Int64("phasestart-epoch") > 0 {
+			currentPhaseStart = abi.ChainEpoch(cctx.Int64("phasestart-epoch"))
+		}
 
 		outDirName := cctx.Args().Get(0)
 		if _, err := os.Stat(outDirName); err == nil {
@@ -171,7 +193,12 @@ var rollup = &cli.Command{
 			return err
 		}
 
-		head, err = api.ChainGetTipSetByHeight(ctx, head.Height()-epochLookback, head.Key())
+		requestedEpoch := cctx.Int64("current-epoch")
+		if requestedEpoch > 0 {
+			head, err = api.ChainGetTipSetByHeight(ctx, abi.ChainEpoch(requestedEpoch), head.Key())
+		} else {
+			head, err = api.ChainGetTipSetByHeight(ctx, head.Height()-defaultEpochLookback, head.Key())
+		}
 		if err != nil {
 			return err
 		}
@@ -231,15 +258,7 @@ var rollup = &cli.Command{
 
 			projStatEntry.timesSeenPieceCidAllTime[dealInfo.Proposal.PieceCID]++
 
-			// Cut off deals from previous phase
-			//
-			// perl -E 'say scalar gmtime ( XXX * 30 + 1598306400 )'
-			//
-			// 166560: Wed Oct 21 18:00:00 2020
-			// 307680: Wed Dec  9 18:00:00 2020
-			// 448800: Wed Jan 27 18:00:00 2021
-			// 569760: Wed Mar 10 18:00:00 2021
-			if dealInfo.State.SectorStartEpoch <= 569760 {
+			if dealInfo.State.SectorStartEpoch < currentPhaseStart {
 				continue
 			}
 
@@ -450,10 +469,23 @@ func getAndParseProjectList(ctx context.Context, saveToDir, projListName string)
 
 	ret := make(map[address.Address]string, 64)
 
+knownProject:
 	for _, p := range proj {
 		a, err := address.NewFromString(p.S("address").Data().(string))
 		if err != nil {
 			return nil, err
+		}
+
+		dsets, err := p.Search("curatedDataset").Children()
+		if err != nil {
+			return nil, err
+		}
+
+		// disqualify any project that has `landsat-8` registered
+		for _, dset := range dsets {
+			if dset.Data().(string) == "landsat-8" {
+				continue knownProject
+			}
 		}
 
 		ret[a] = p.S("project").Data().(string)
