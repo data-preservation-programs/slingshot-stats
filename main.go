@@ -469,10 +469,23 @@ func getAndParseProjectList(ctx context.Context, saveToDir, projListName string)
 
 	ret := make(map[address.Address]string, 64)
 
+knownProject:
 	for _, p := range proj {
 		a, err := address.NewFromString(p.S("address").Data().(string))
 		if err != nil {
 			return nil, err
+		}
+
+		dsets, err := p.Search("curatedDataset").Children()
+		if err != nil {
+			return nil, err
+		}
+
+		// disqualify any project that has `landsat-8` registered
+		for _, dset := range dsets {
+			if dset.Data().(string) == "landsat-8" {
+				continue knownProject
+			}
 		}
 
 		ret[a] = p.S("project").Data().(string)
