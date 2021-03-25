@@ -127,6 +127,7 @@ func main() {
 
 	if err := app.Run(os.Args); err != nil {
 		log.Error(err)
+		os.Exit(1)
 		return
 	}
 }
@@ -423,7 +424,7 @@ var rollup = &cli.Command{
 // }
 func getAndParseProjectList(ctx context.Context, saveToDir, projListName string) (map[address.Address]string, error) {
 
-	var projListFh *os.File
+	var projListSrc io.Reader
 
 	if strings.HasPrefix(projListName, "http://") || strings.HasPrefix(projListName, "https://") {
 		req, err := http.NewRequestWithContext(ctx, "GET", projListName, nil)
@@ -440,25 +441,34 @@ func getAndParseProjectList(ctx context.Context, saveToDir, projListName string)
 			return nil, xerrors.Errorf("non-200 response: %d", resp.StatusCode)
 		}
 
-		projListFh, err = os.Create(saveToDir + "/client_list.json")
-		if err != nil {
-			return nil, err
-		}
+		projListSrc = resp.Body
 
-		_, err = io.Copy(projListFh, resp.Body)
-		if err != nil {
-			return nil, err
-		}
 	} else {
-		return nil, xerrors.New("file inputs not yet supported")
+		inputFh, err := os.Open(projListName)
+		if err != nil {
+			return nil, xerrors.Errorf("failed to open '%s': %w", projListName, err)
+		}
+		defer inputFh.Close()
+
+		projListSrc = inputFh
 	}
 
-	if _, err := projListFh.Seek(0, 0); err != nil {
+	projListCopy, err := os.Create(saveToDir + "/client_list.json")
+	if err != nil {
 		return nil, err
 	}
-	defer projListFh.Close()
+	defer projListCopy.Close()
 
-	projList, err := gabs.ParseJSONBuffer(projListFh)
+	_, err = io.Copy(projListCopy, projListSrc)
+	if err != nil {
+		return nil, xerrors.Errorf("failed to copy from %s to %s: %w", projListName, saveToDir+"/client_list.json", err)
+	}
+
+	if _, err := projListCopy.Seek(0, 0); err != nil {
+		return nil, err
+	}
+
+	projList, err := gabs.ParseJSONBuffer(projListCopy)
 	if err != nil {
 		return nil, err
 	}
