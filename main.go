@@ -32,7 +32,8 @@ var defaultEpochLookback = abi.ChainEpoch(10)
 // 307680: Wed Dec  9 18:00:00 2020
 // 448800: Wed Jan 27 18:00:00 2021
 // 569760: Wed Mar 10 18:00:00 2021
-var currentPhaseStart = abi.ChainEpoch(569760)
+// 756960: Fri May 14 18:00:00 2021
+var currentPhaseStart = abi.ChainEpoch(756960)
 
 //
 // contents of basic_stats.json
