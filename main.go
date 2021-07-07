@@ -15,7 +15,7 @@ import (
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-state-types/abi"
 	lcli "github.com/filecoin-project/lotus/cli"
-	"github.com/filecoin-project/specs-actors/v3/actors/builtin"
+	"github.com/filecoin-project/specs-actors/actors/builtin"
 	"github.com/ipfs/go-cid"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/urfave/cli/v2"
@@ -33,7 +33,8 @@ var defaultEpochLookback = abi.ChainEpoch(10)
 // 448800: Wed Jan 27 18:00:00 2021
 // 569760: Wed Mar 10 18:00:00 2021
 // 756960: Fri May 14 18:00:00 2021
-var currentPhaseStart = abi.ChainEpoch(756960)
+// 912480: Wed Jul  7 18:00:00 2021
+var currentPhaseStart = abi.ChainEpoch(912480)
 
 //
 // contents of basic_stats.json
