@@ -14,6 +14,7 @@ import (
 	"github.com/Jeffail/gabs"
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-state-types/abi"
+	"github.com/filecoin-project/lotus/chain/types"
 	lcli "github.com/filecoin-project/lotus/cli"
 	"github.com/filecoin-project/specs-actors/actors/builtin"
 	"github.com/ipfs/go-cid"
@@ -114,7 +115,7 @@ var log = logging.Logger("slingshot-stats")
 var resolvedWallets = map[address.Address]address.Address{}
 
 func main() {
-	logging.SetLogLevel("*", "INFO")
+	logging.SetLogLevel("*", "INFO") //nolint:errcheck
 
 	app := &cli.App{
 		Name:  "slingshot-stats",
@@ -141,9 +142,10 @@ var rollup = &cli.Command{
 	Name:      "rollup",
 	ArgsUsage: "  <non-existent output directory name>  <eligible project list>",
 	Flags: []cli.Flag{
-		&cli.Int64Flag{
-			Name:        "current-epoch",
-			DefaultText: "Current Filecoin epoch",
+		&cli.StringFlag{
+			Name:        "tipset",
+			Usage:       "Current tipset either as comma separated array of cids, or @height",
+			DefaultText: fmt.Sprintf("%d epochs behind current", defaultEpochLookback),
 		},
 		&cli.Int64Flag{
 			Name:  "phasestart-epoch",
@@ -185,30 +187,32 @@ var rollup = &cli.Command{
 		if err != nil {
 			return err
 		}
-		defer outClientStatsFd.Close()
+		defer outClientStatsFd.Close() //nolint:errcheck
 
 		outBasicStatsFd, err := os.Create(outDirName + "/basic_stats.json")
 		if err != nil {
 			return err
 		}
-		defer outBasicStatsFd.Close()
+		defer outBasicStatsFd.Close() //nolint:errcheck
 
-		head, err := api.ChainHead(ctx)
-		if err != nil {
-			return err
-		}
-
-		requestedEpoch := cctx.Int64("current-epoch")
-		if requestedEpoch > 0 {
-			head, err = api.ChainGetTipSetByHeight(ctx, abi.ChainEpoch(requestedEpoch), head.Key())
+		var ts *types.TipSet
+		if cctx.String("tipset") == "" {
+			ts, err = api.ChainHead(ctx)
+			if err != nil {
+				return err
+			}
+			ts, err = api.ChainGetTipSetByHeight(ctx, ts.Height()-defaultEpochLookback, ts.Key())
+			if err != nil {
+				return err
+			}
 		} else {
-			head, err = api.ChainGetTipSetByHeight(ctx, head.Height()-defaultEpochLookback, head.Key())
-		}
-		if err != nil {
-			return err
+			ts, err = lcli.ParseTipSetRef(ctx, api, cctx.String("tipset"))
+			if err != nil {
+				return err
+			}
 		}
 
-		deals, err := api.StateMarketDeals(ctx, head.Key())
+		deals, err := api.StateMarketDeals(ctx, ts.Key())
 		if err != nil {
 			return err
 		}
@@ -227,15 +231,20 @@ var rollup = &cli.Command{
 			// Only count deals whose sectors have properly started, not past/future ones
 			// https://github.com/filecoin-project/specs-actors/blob/v0.9.9/actors/builtin/market/deal.go#L81-L85
 			// Bail on 0 as well in case SectorStartEpoch is uninitialized due to some bug
+			//
+			// Additionally if the SlashEpoch is set this means the underlying sector is
+			// terminated for whatever reason ( not just slashed ), and the deal record
+			// will soon be removed from the state entirely
 			if dealInfo.State.SectorStartEpoch <= 0 ||
-				dealInfo.State.SectorStartEpoch > head.Height() {
+				dealInfo.State.SectorStartEpoch > ts.Height() ||
+				dealInfo.State.SlashEpoch > -1 {
 				continue
 			}
 
 			clientAddr, found := resolvedWallets[dealInfo.Proposal.Client]
 			if !found {
 				var err error
-				clientAddr, err = api.StateAccountKey(ctx, dealInfo.Proposal.Client, head.Key())
+				clientAddr, err = api.StateAccountKey(ctx, dealInfo.Proposal.Client, ts.Key())
 				if err != nil {
 					log.Warnf("failed to resolve id '%s' to wallet address: %s", dealInfo.Proposal.Client, err)
 					continue
@@ -335,7 +344,7 @@ var rollup = &cli.Command{
 					return err
 				}
 
-				defer outListFd.Close()
+				defer outListFd.Close() //nolint:errcheck
 
 				sort.Slice(dl, func(i, j int) bool {
 					return dl[j].PaddedSize < dl[i].PaddedSize
@@ -343,7 +352,7 @@ var rollup = &cli.Command{
 
 				if err := json.NewEncoder(outListFd).Encode(
 					dealListOutput{
-						Epoch:    int64(head.Height()),
+						Epoch:    int64(ts.Height()),
 						Endpoint: "DEAL_LIST",
 						Payload:  dl,
 					},
@@ -368,7 +377,7 @@ var rollup = &cli.Command{
 
 		if err := json.NewEncoder(outBasicStatsFd).Encode(
 			competitionTotalOutput{
-				Epoch:    int64(head.Height()),
+				Epoch:    int64(ts.Height()),
 				Endpoint: "COMPETITION_TOTALS",
 				Payload:  grandTotals,
 			},
@@ -400,7 +409,7 @@ var rollup = &cli.Command{
 
 		if err := json.NewEncoder(outClientStatsFd).Encode(
 			projectAggregateStatsOutput{
-				Epoch:    int64(head.Height()),
+				Epoch:    int64(ts.Height()),
 				Endpoint: "PROJECT_DEAL_STATS",
 				Payload:  projStats,
 			},
@@ -439,7 +448,7 @@ func getAndParseProjectList(ctx context.Context, saveToDir, projListName string)
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint:errcheck
 
 		if resp.StatusCode != http.StatusOK {
 			return nil, xerrors.Errorf("non-200 response: %d", resp.StatusCode)
@@ -452,7 +461,7 @@ func getAndParseProjectList(ctx context.Context, saveToDir, projListName string)
 		if err != nil {
 			return nil, xerrors.Errorf("failed to open '%s': %w", projListName, err)
 		}
-		defer inputFh.Close()
+		defer inputFh.Close() //nolint:errcheck
 
 		projListSrc = inputFh
 	}
@@ -461,7 +470,7 @@ func getAndParseProjectList(ctx context.Context, saveToDir, projListName string)
 	if err != nil {
 		return nil, err
 	}
-	defer projListCopy.Close()
+	defer projListCopy.Close() //nolint:errcheck
 
 	_, err = io.Copy(projListCopy, projListSrc)
 	if err != nil {
