@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Jeffail/gabs"
@@ -226,8 +227,8 @@ var rollup = &cli.Command{
 			seenPieceCid: make(map[cid.Cid]bool),
 		}
 
+		orderedDealList := make([]string, 0, len(deals))
 		for dealID, dealInfo := range deals {
-
 			// Only count deals whose sectors have properly started, not past/future ones
 			// https://github.com/filecoin-project/specs-actors/blob/v0.9.9/actors/builtin/market/deal.go#L81-L85
 			// Bail on 0 as well in case SectorStartEpoch is uninitialized due to some bug
@@ -239,6 +240,35 @@ var rollup = &cli.Command{
 				dealInfo.State.SectorStartEpoch > ts.Height() ||
 				dealInfo.State.SlashEpoch > -1 {
 				continue
+			}
+
+			orderedDealList = append(orderedDealList, dealID)
+		}
+
+		sort.Slice(orderedDealList, func(i, j int) bool {
+			di, dj := deals[orderedDealList[i]], deals[orderedDealList[j]]
+			switch {
+
+			case di.State.SectorStartEpoch != dj.State.SectorStartEpoch:
+				return di.State.SectorStartEpoch < dj.State.SectorStartEpoch
+
+			case di.Proposal.StartEpoch != dj.Proposal.StartEpoch:
+				return di.Proposal.StartEpoch < dj.Proposal.StartEpoch
+
+			default:
+				didi, _ := strconv.ParseInt(orderedDealList[i], 10, 64)
+				didj, _ := strconv.ParseInt(orderedDealList[j], 10, 64)
+				return didi < didj
+			}
+		})
+
+		for _, dealID := range orderedDealList {
+
+			dealInfo := deals[dealID]
+
+			payloadCid := "unknown"
+			if c, err := cid.Parse(dealInfo.Proposal.Label); err == nil {
+				payloadCid = c.String()
 			}
 
 			clientAddr, found := resolvedWallets[dealInfo.Proposal.Client]
@@ -317,11 +347,6 @@ var rollup = &cli.Command{
 			if dealInfo.Proposal.VerifiedDeal {
 				grandTotals.FilplusTotalDeals++
 				grandTotals.FilplusTotalBytes += int64(dealInfo.Proposal.PieceSize)
-			}
-
-			payloadCid := "unknown"
-			if c, err := cid.Parse(dealInfo.Proposal.Label); err == nil {
-				payloadCid = c.String()
 			}
 
 			projDealLists[projID] = append(projDealLists[projID], &individualDeal{
