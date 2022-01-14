@@ -40,6 +40,9 @@ var defaultEpochLookback = abi.ChainEpoch(10)
 // 1275360: Wed Nov 10 18:00:00 2021
 var currentPhaseStart = abi.ChainEpoch(1275360)
 
+// 1381920: Fri Dec 17 18:00:00 2021
+var recoveryStart = abi.ChainEpoch(1381920)
+
 //
 // contents of basic_stats.json
 type competitionTotalOutput struct {
@@ -112,6 +115,27 @@ type individualDeal struct {
 	PaddedSize     int64  `json:"data_size"`
 }
 
+//
+// contents of recovery_deallist.json
+type recoveryListOutput struct {
+	Epoch    int64           `json:"epoch"`
+	Endpoint string          `json:"endpoint"`
+	Payload  []recoveredDeal `json:"payload"`
+}
+type recoveredDeal struct {
+	DealID          string `json:"deal_id"`
+	ClientAddress   string `json:"client_address"`
+	MinerID         string `json:"miner_id"`
+	PieceCID        string `json:"piece_cid"`
+	Label           string `json:"label"`
+	PayloadCIDb32   string `json:"payload_cid"`
+	PaddedPieceSize uint64 `json:"padded_piece_size"`
+	DataSize        uint64 `json:"data_size"`
+	DealStartEpoch  int64  `json:"deal_start_epoch"`
+	DealEndEpoch    int64  `json:"deal_end_epoch"`
+	RecoveryType    int8   `json:"recovery"` // 1: restore, 2: repair
+}
+
 var log = logging.Logger("slingshot-stats")
 var resolvedWallets = map[address.Address]address.Address{}
 
@@ -155,8 +179,8 @@ var rollup = &cli.Command{
 	},
 	Action: func(cctx *cli.Context) error {
 
-		if cctx.Args().Len() != 2 || cctx.Args().Get(0) == "" || cctx.Args().Get(1) == "" {
-			return errors.New("must supply 2 arguments: a nonexistent target directory to write results to and a source of currently active projects")
+		if cctx.Args().Len() != 3 || cctx.Args().Get(0) == "" || cctx.Args().Get(1) == "" || cctx.Args().Get(2) == "" {
+			return errors.New("must supply 3 arguments: a nonexistent target directory to write results to, a source of currently active projects and a source of recovery list clients")
 		}
 		ctx := lcli.ReqContext(cctx)
 
@@ -178,6 +202,11 @@ var rollup = &cli.Command{
 			return xerrors.Errorf("determining registered project failed: %s", err)
 		}
 
+		knownRestoreClients, err := getAndParseRestore(ctx, outDirName, cctx.Args().Get(2))
+		if err != nil {
+			return xerrors.Errorf("determining restore clients failed: %s", err)
+		}
+
 		api, apiCloser, err := lcli.GetFullNodeAPI(cctx)
 		if err != nil {
 			return err
@@ -195,6 +224,12 @@ var rollup = &cli.Command{
 			return err
 		}
 		defer outBasicStatsFd.Close() //nolint:errcheck
+
+		outRecoveryListFd, err := os.Create(outDirName + "/recovery_deallist.json")
+		if err != nil {
+			return err
+		}
+		defer outRecoveryListFd.Close() //nolint:errcheck
 
 		var ts *types.TipSet
 		if cctx.String("tipset") == "" {
@@ -217,6 +252,8 @@ var rollup = &cli.Command{
 		if err != nil {
 			return err
 		}
+
+		recoveredDeals := make([]recoveredDeal, 0, 8192)
 
 		projStats := make(map[string]*projectAggregateStats)
 		projDealLists := make(map[string][]*individualDeal)
@@ -267,8 +304,10 @@ var rollup = &cli.Command{
 			dealInfo := deals[dealID]
 
 			payloadCid := "unknown"
+			payloadCidB32 := "unknown"
 			if c, err := cid.Parse(dealInfo.Proposal.Label); err == nil {
 				payloadCid = c.String()
+				payloadCidB32 = cid.NewCidV1(c.Type(), c.Hash()).String()
 			}
 
 			clientAddr, found := resolvedWallets[dealInfo.Proposal.Client]
@@ -281,6 +320,29 @@ var rollup = &cli.Command{
 				}
 
 				resolvedWallets[dealInfo.Proposal.Client] = clientAddr
+			}
+
+			if _, isRecover := knownRestoreClients[clientAddr]; isRecover &&
+				dealInfo.State.SectorStartEpoch >= recoveryStart &&
+				dealInfo.Proposal.EndEpoch-dealInfo.Proposal.StartEpoch > builtin.EpochsInDay*499 {
+				recoveredDeals = append(recoveredDeals, recoveredDeal{
+					DealID:          dealID,
+					ClientAddress:   clientAddr.String(),
+					MinerID:         dealInfo.Proposal.Provider.String(),
+					PieceCID:        dealInfo.Proposal.PieceCID.String(),
+					Label:           dealInfo.Proposal.Label,
+					PayloadCIDb32:   payloadCidB32,
+					PaddedPieceSize: uint64(dealInfo.Proposal.PieceSize),
+					DataSize:        uint64(dealInfo.Proposal.PieceSize),
+					DealStartEpoch:  int64(dealInfo.Proposal.StartEpoch),
+					DealEndEpoch:    int64(dealInfo.Proposal.EndEpoch),
+					RecoveryType:    1,
+				})
+			}
+
+			// TEMP WORKAROUND
+			if clientAddr.String() == "f17ia7m5mvizrdug3sqtevqw3tifiqvxqr3kdaeuq" && dealInfo.State.SectorStartEpoch >= recoveryStart {
+				continue
 			}
 
 			projID, projKnown := knownAddrMap[clientAddr]
@@ -411,6 +473,18 @@ var rollup = &cli.Command{
 		}
 
 		//
+		// write out recovery_deallist.json
+		if err := json.NewEncoder(outRecoveryListFd).Encode(
+			recoveryListOutput{
+				Epoch:    int64(ts.Height()),
+				Endpoint: "RECOVERED_DEALS_LIST",
+				Payload:  recoveredDeals,
+			},
+		); err != nil {
+			return err
+		}
+
+		//
 		// write out client_stats.json
 		for _, ps := range projStats {
 			ps.NumCids = len(ps.timesSeenPieceCid)
@@ -529,6 +603,7 @@ knownProject:
 			return nil, err
 		}
 
+		// TEMP WORKAROUND
 		// disqualify any project that has `landsat-8` registered
 		for _, dset := range dsets {
 			if dset.Data().(string) == "landsat-8" {
@@ -541,6 +616,68 @@ knownProject:
 
 	if len(ret) == 0 {
 		return nil, xerrors.Errorf("no active projects/clients found in '%s': unable to continue", projListName)
+	}
+
+	return ret, nil
+}
+
+// Downloads and parses recovery list clients JSON:
+func getAndParseRestore(ctx context.Context, saveToDir, restoreClientsListName string) (map[address.Address]struct{}, error) {
+
+	var clientListSrc io.Reader
+
+	if strings.HasPrefix(restoreClientsListName, "http://") || strings.HasPrefix(restoreClientsListName, "https://") {
+		req, err := http.NewRequestWithContext(ctx, "GET", restoreClientsListName, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close() //nolint:errcheck
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, xerrors.Errorf("non-200 response: %d", resp.StatusCode)
+		}
+
+		clientListSrc = resp.Body
+
+	} else {
+		inputFh, err := os.Open(restoreClientsListName)
+		if err != nil {
+			return nil, xerrors.Errorf("failed to open '%s': %w", restoreClientsListName, err)
+		}
+		defer inputFh.Close() //nolint:errcheck
+
+		clientListSrc = inputFh
+	}
+
+	clientListCopy, err := os.Create(saveToDir + "/restore_client_list.json")
+	if err != nil {
+		return nil, err
+	}
+	defer clientListCopy.Close() //nolint:errcheck
+
+	_, err = io.Copy(clientListCopy, clientListSrc)
+	if err != nil {
+		return nil, xerrors.Errorf("failed to copy from %s to %s: %w", restoreClientsListName, saveToDir+"/restore_client_list.json", err)
+	}
+
+	if _, err := clientListCopy.Seek(0, 0); err != nil {
+		return nil, err
+	}
+
+	fl := struct {
+		Payload []address.Address `json:"payload"`
+	}{}
+	if err = json.NewDecoder(clientListCopy).Decode(&fl); err != nil {
+		return nil, err
+	}
+
+	ret := make(map[address.Address]struct{})
+	for _, a := range fl.Payload {
+		ret[a] = struct{}{}
 	}
 
 	return ret, nil
