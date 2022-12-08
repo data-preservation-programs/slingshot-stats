@@ -1,6 +1,9 @@
-# slingshot-stats
+# OBSOLETE / DO NOT USE
 
-This is a lightweight lotus-client providing the data and rollups feeding https://slingshot.filecoin.io/
+Kept for historic purposes
+
+## slingshot-stats
+- a lightweight lotus-client used for the data and rollups feeding Slingshot V2
 
 ### Prerequisites
 
